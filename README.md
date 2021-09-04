@@ -1,6 +1,6 @@
 # Battlesnake
 
-Just having a play with Battlesnake (see (https://play.battlesnake.com/)[https://play.battlesnake.com/]).
+Just having a play with Battlesnake (see [https://play.battlesnake.com/](https://play.battlesnake.com/)).
 
 # Deployment
 
