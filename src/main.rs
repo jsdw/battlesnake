@@ -18,10 +18,6 @@ struct Opts {
     addr: std::net::SocketAddr,
 }
 
-/// This much latency is allowed between moves. For now, we just take the max of 500
-/// and remove some amount to account for latency.
-const ALLOWED_LATENCY: std::time::Duration = std::time::Duration::from_millis(400);
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
@@ -61,11 +57,11 @@ async fn main() -> anyhow::Result<()> {
 
                         // Put a new snake into play:
                         games.lock().unwrap().insert(game_id.clone(), Some(Box::new(DownSnake)));
-                        // Clean up after ourselves after a while to limit the impact of malicious calls:
+                        // Remove this snake again after 3mins to limit the impact of malicious calls:
                         tokio::spawn({
                             let games = games.clone();
                             async move {
-                                tokio::time::sleep(tokio::time::Duration::from_secs(600)).await;
+                                tokio::time::sleep(tokio::time::Duration::from_secs(180)).await;
                                 games.lock().unwrap().remove(&game_id);
                             }
                         });
@@ -76,6 +72,22 @@ async fn main() -> anyhow::Result<()> {
                     (&Method::POST, "move") => {
                         let turn: request::Turn = body_into_json(req).await?;
                         let game_id = turn.game.id.clone();
+                        let start_time = std::time::Instant::now();
+
+                        // Work out how much time we have to spend on a move:
+                        let timeout_ms = turn.game.timeout as u64;
+                        let latency = match turn.you.latency.parse::<u64>() {
+                            Ok(val) => val,
+                            Err(_) => return Err(Error::Them(400, format!("{} is not a valid latency number", turn.you.latency)))
+                        };
+                        let this_turn_ms = timeout_ms
+                            // Minus latency from the time we have:
+                            .checked_sub(latency)
+                            // Minus another 50ms to give us some breathing room: 
+                            .and_then(|v| v.checked_sub(50))
+                            // If that fails (we go below 0), we sortof give up and default to the total timeout:
+                            .unwrap_or(timeout_ms);
+                        let this_turn_duration = std::time::Duration::from_millis(this_turn_ms);
 
                         // Pull out the snake associated with this game:
                         let mut snake = match games.lock().unwrap().get_mut(&game_id) {
@@ -87,19 +99,20 @@ async fn main() -> anyhow::Result<()> {
                             },
                             None => return Err(Error::Them(400, "This snake doesn't exist".to_string()))
                         };
+
                         // Find the best move we can in roughly the time allowed:
                         let (best_move, snake) = tokio::task::spawn_blocking(move || {
-                            let start_time = std::time::Instant::now();
                             let mut moves = snake.iter_moves(turn);
                             let mut best_move = None;
                             while let Some(curr_move) = moves.next() {
                                 best_move = Some(curr_move);
-                                if std::time::Instant::now().duration_since(start_time) > ALLOWED_LATENCY {
+                                if std::time::Instant::now().duration_since(start_time) > this_turn_duration {
                                     break;
                                 }
                             };
                             (best_move, snake)
                         }).await?;
+                        
                         // Put our snake back, ready for the next turn. If the snake "holder" was removed (proabably
                         // because the game ended or lasted too long), we do nothing and let our snake be thrown away.
                         if let Some(res) = games.lock().unwrap().get_mut(&game_id) {
@@ -113,7 +126,7 @@ async fn main() -> anyhow::Result<()> {
                     (&Method::POST, "end") => {
                         let turn: request::Turn = body_into_json(req).await?;
 
-                        // Remove our snake; the game is over
+                        // Remove our snake; the game is over.
                         games.lock().unwrap().remove(&turn.game.id);
 
                         Ok(Response::default())
