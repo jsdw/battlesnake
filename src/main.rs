@@ -40,11 +40,11 @@ async fn main() -> anyhow::Result<()> {
             let games = games.clone();
             async move {
                 let method = req.method();
-                let path = req.uri().path().trim_end_matches('/');
+                let path = req.uri().path().trim_matches('/');
 
                 match (method, path) {
                     // Return some basic battlesnake info:
-                    (&Method::GET, "/") => {
+                    (&Method::GET, "") => {
                         Ok::<_, Error>(json_response(&response::Info {
                             apiversion: "1".to_string(),
                             author: Some("jsdw".to_string()),
@@ -55,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
                         }))
                     },
                     // Battlesnake server has asked to start a new game!
-                    (&Method::POST, "/start") => {
+                    (&Method::POST, "start") => {
                         let turn: request::Turn = body_into_json(req).await?;
                         let game_id = turn.game.id;
 
@@ -73,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
                         Ok(Response::default())
                     },
                     // Make a move!
-                    (&Method::POST, "/move") => {
+                    (&Method::POST, "move") => {
                         let turn: request::Turn = body_into_json(req).await?;
                         let game_id = turn.game.id.clone();
 
@@ -110,7 +110,7 @@ async fn main() -> anyhow::Result<()> {
                         Ok(json_response(&best_move.unwrap_or_default()))
                     },
                     // End the game!
-                    (&Method::POST, "/end") => {
+                    (&Method::POST, "end") => {
                         let turn: request::Turn = body_into_json(req).await?;
 
                         // Remove our snake; the game is over
