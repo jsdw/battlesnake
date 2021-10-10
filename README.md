@@ -1,6 +1,12 @@
 # Battlesnake
 
-Just having a play with Battlesnake (see [https://play.battlesnake.com/](https://play.battlesnake.com/)).
+A basic Rust template for getting started with Battlesnake, (see [https://play.battlesnake.com/](https://play.battlesnake.com/)).
+
+One "snake" has been implemented, `down_snake`, which just moves down every turn.
+
+To build a new snake, add a file in the `/src/snakes` folder and implement the `Snake` trait, as `down_snake` has done. Finally, make the code aware of your new snake by giving the snake a name (which should be basic lowercase ASCII chars, sicne it'll appear in the HTTP path) and builder in the `build_snake_by_name` function in `/src/main.rs`.  
+
+Snakes implement the `Snake` trait. Each turn, the goal of the snake is to produce the best move it can before time elapses. It does this by returning an iterator of moves. The idea is that we will keep iterating for as long as possible, and use the last move produced when the time runs out. Iterations should not last more than 10-20ms so that the code has the chance to stop iterating in a timely fashion when the turn time is exhausted.
 
 # Deployment
 

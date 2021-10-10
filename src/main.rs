@@ -18,6 +18,16 @@ struct Opts {
     addr: std::net::SocketAddr,
 }
 
+/// If you add more snakes, give them a name and construct their initial
+/// states here. The server will look for paths beginning with this name
+/// (eg `/down/start`) and construct the appropriate snake based on the name.
+fn build_snake_by_name(name: &str) -> Option<Box<dyn Snake>> {
+    match name {
+        "down" => Some(Box::new(DownSnake)),
+        _ => None
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
@@ -38,7 +48,21 @@ async fn main() -> anyhow::Result<()> {
                 let method = req.method();
                 let path = req.uri().path().trim_matches('/');
 
-                match (method, path) {
+                // The path must at least contain the snake name
+                if path.is_empty() {
+                    return Ok(Response::builder()
+                        .status(400)
+                        .body("The path must look something like ${snake_name}[/${command}]".into())
+                        .unwrap())
+                }
+
+                // The first part of the path should be the name of the snake:
+                let (snake_name, command) = match path.split_once('/') {
+                    Some((snake_name, command)) => (snake_name, command),
+                    None => (path, "")
+                };
+
+                match (method, command) {
                     // Return some basic battlesnake info:
                     (&Method::GET, "") => {
                         Ok::<_, Error>(json_response(&response::Info {
@@ -52,11 +76,20 @@ async fn main() -> anyhow::Result<()> {
                     },
                     // Battlesnake server has asked to start a new game!
                     (&Method::POST, "start") => {
+                        let snake_name = snake_name.to_string();
                         let turn: request::Turn = body_into_json(req).await?;
                         let game_id = turn.game.id;
 
+                        // Attempt to cosntruct the snake asked for:
+                        let new_snake = match build_snake_by_name(&snake_name) {
+                            Some(snake) => snake,
+                            None => return Ok(Response::builder()
+                                .status(404)
+                                .body(format!("A snake called '{}' does not exist", snake_name).into())
+                                .unwrap())
+                        };
                         // Put a new snake into play:
-                        games.lock().unwrap().insert(game_id.clone(), Some(Box::new(DownSnake)));
+                        games.lock().unwrap().insert(game_id.clone(), Some(new_snake));
                         // Remove this snake again after 3mins to limit the impact of malicious calls:
                         tokio::spawn({
                             let games = games.clone();
@@ -76,17 +109,16 @@ async fn main() -> anyhow::Result<()> {
 
                         // Work out how much time we have to spend on a move:
                         let timeout_ms = turn.game.timeout as u64;
-                        let latency = match turn.you.latency.parse::<u64>() {
-                            Ok(val) => val,
-                            Err(_) => return Err(Error::Them(400, format!("{} is not a valid latency number", turn.you.latency)))
-                        };
+                        let latency = turn.you.latency.parse::<u64>()
+                            // Pick a fairly high default latency if not provided:
+                            .unwrap_or(150);
                         let this_turn_ms = timeout_ms
                             // Minus latency from the time we have:
                             .checked_sub(latency)
                             // Minus another 50ms to give us some breathing room: 
                             .and_then(|v| v.checked_sub(50))
-                            // If that fails (we go below 0), we sortof give up and default to the total timeout:
-                            .unwrap_or(timeout_ms);
+                            // If that fails (we go below 0), we sortof give up and default to a small arbitrary timeout:
+                            .unwrap_or(100);
                         let this_turn_duration = std::time::Duration::from_millis(this_turn_ms);
 
                         // Pull out the snake associated with this game:
@@ -132,10 +164,10 @@ async fn main() -> anyhow::Result<()> {
                         Ok(Response::default())
                     },
                     // All other requests are unknown and handled with a 404.
-                    _ => {
+                    (_, cmd) => {
                         Ok(Response::builder()
                             .status(404)
-                            .body(Body::from("Woa, that ain't a path I recognise"))
+                            .body(format!("The command '{}' is not recognised. expected start|move|end", cmd).into())
                             .unwrap())
                     }
                 }
